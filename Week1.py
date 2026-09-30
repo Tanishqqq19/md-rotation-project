@@ -16,7 +16,7 @@ def init_positions(number_of_atoms):
     BOX_LENGTH = (number_of_atoms / RHO) ** (1 / 3) # This is to find the length of the cube(space) where all the atoms would fit.
 
     n_side = int(np.ceil(number_of_atoms ** (1.0 / 3.0))) # this tells you the amount of atoms in each side of the cube.
-    spacing = number_of_atoms / n_side # this tells me how spaced apart each atom should be from each other
+    spacing = BOX_LENGTH / n_side # this tells me how spaced apart each atom should be from each other
 
     positions = []
     for x in range(n_side):
@@ -35,3 +35,74 @@ def init_velocities(n, T):
     return velocities
 
 
+"""
+Periodic boundary conditions
+"""
+def periodic_boundary_conditions(atom_x_coordinates, atom_y_coordinates, box_length):
+    normal_length = abs(atom_y_coordinates - atom_x_coordinates)
+    periodic_length = box_length - abs(atom_y_coordinates - atom_x_coordinates)
+    return min(normal_length, periodic_length)
+
+"""
+Wraps particle positions back into the simulation box
+Since the length of the box is from -L/2 to L/2
+this function places that particular atom coordinate into this adjusted box
+"""
+def wrap_positions(positions, box_length):
+    return positions - box_length * np.round(positions / box_length)
+
+
+"""
+Computes Lennard-Jones forces and potential energy for every pair of
+atoms, using a cutoff at rc.
+"""
+
+def lj_force_potential(positions, box_length):
+    cutoff_radius = 2.5
+    epsilon = 1.0
+    sigma = 1.0
+
+    number_of_atoms = len(positions)
+
+    cutoff_radius_squared = cutoff_radius * cutoff_radius
+
+    for i in range(number_of_atoms - 1):
+        for j in range(i + 1, number_of_atoms):
+            raw_separation_vector = positions[i] - positions[j]
+            separation_vector = raw_separation_vector - box_length * np.round(raw_separation_vector / box_length)
+            distance_squared = np.dot(separation_vector, separation_vector)
+
+            if distance_squared < cutoff_radius_squared:
+                distance = np.sqrt(distance_squared)
+                sigma_over_distance_6 = (sigma / distance) ** 6
+                sigma_over_distance_12 = sigma_over_distance_6 ** 2
+
+                # successfully calculated the potential energy 
+                potential_energy = 4.0 * epsilon * (sigma_over_distance_12 - sigma_over_distance_6)
+
+
+                force = 24.0 * epsilon / (distance ** 2) * (2.0 * sigma_over_distance_12 - sigma_over_distance_6) * raw_separation_vector
+
+
+                # add the direction vector to the force
+                # subtract the extra constant from potential energy
+
+    return force, potential_energy
+
+
+def velocity_verlet_step(positions, velocities, forces_old, box_length, dt):
+    mass=1.0
+
+    accel_old = forces_old / mass
+
+    velocities_half = velocities + 0.5 * dt * accel_old # eqn 3.11a
+    positions_new = positions + dt * velocities_half # eqn 3.11b
+
+    positions_new = wrap_positions(positions_new, box_length)
+
+    forces_new, potential_energy = lj_force_potential(positions_new, box_length)
+    accel_new = forces_new / mass
+
+    velocities_new = velocities_half + 0.5 * dt * accel_new # eqn 3.11c
+
+    return positions_new, velocities_new, forces_new, potential_energy
