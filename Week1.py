@@ -63,46 +63,52 @@ def lj_force_potential(positions, box_length):
     sigma = 1.0
 
     number_of_atoms = len(positions)
+    forces = np.zeros_like(positions)
+    total_potential_energy = 0.0
 
-    cutoff_radius_squared = cutoff_radius * cutoff_radius
+    sigma_over_cutoff_6 = (sigma / cutoff_radius) ** 6
+    sigma_over_cutoff_12 = sigma_over_cutoff_6 ** 2
+    potential_energy_at_cutoff = 4.0 * epsilon * (sigma_over_cutoff_12 - sigma_over_cutoff_6)
+    force_magnitude_at_cutoff = 24.0 * epsilon / cutoff_radius * (2.0 * sigma_over_cutoff_12 - sigma_over_cutoff_6)
 
     for i in range(number_of_atoms - 1):
         for j in range(i + 1, number_of_atoms):
             raw_separation_vector = positions[i] - positions[j]
             separation_vector = raw_separation_vector - box_length * np.round(raw_separation_vector / box_length)
-            distance_squared = np.dot(separation_vector, separation_vector)
+            distance = np.sqrt(np.dot(separation_vector, separation_vector))
 
-            if distance_squared < cutoff_radius_squared:
-                distance = np.sqrt(distance_squared)
+            if distance < cutoff_radius:
                 sigma_over_distance_6 = (sigma / distance) ** 6
                 sigma_over_distance_12 = sigma_over_distance_6 ** 2
 
-                # successfully calculated the potential energy 
                 potential_energy = 4.0 * epsilon * (sigma_over_distance_12 - sigma_over_distance_6)
+                force_magnitude = 24.0 * epsilon / distance * (2.0 * sigma_over_distance_12 - sigma_over_distance_6)
 
+                shifted_potential_energy = (potential_energy - potential_energy_at_cutoff) + (distance - cutoff_radius) * force_magnitude_at_cutoff
+                shifted_force_magnitude = force_magnitude - force_magnitude_at_cutoff
 
-                force = 24.0 * epsilon / (distance ** 2) * (2.0 * sigma_over_distance_12 - sigma_over_distance_6) * raw_separation_vector
+                force_vector = shifted_force_magnitude * (separation_vector / distance)
+                forces[i] += force_vector
+                forces[j] -= force_vector
 
+                total_potential_energy += shifted_potential_energy
 
-                # add the direction vector to the force
-                # subtract the extra constant from potential energy
-
-    return force, potential_energy
+    return forces, total_potential_energy
 
 
 def velocity_verlet_step(positions, velocities, forces_old, box_length, dt):
-    mass=1.0
+    mass = 1.0
 
     accel_old = forces_old / mass
 
-    velocities_half = velocities + 0.5 * dt * accel_old # eqn 3.11a
-    positions_new = positions + dt * velocities_half # eqn 3.11b
+    velocities_half = velocities + 0.5 * dt * accel_old  # eqn 3.11a
+    positions_new = positions + dt * velocities_half      # eqn 3.11b
 
     positions_new = wrap_positions(positions_new, box_length)
 
-    forces_new, potential_energy = lj_force_potential(positions_new, box_length)
+    forces_new, potential_energy = lj_force_potential(positions_new, box_length)  
     accel_new = forces_new / mass
 
-    velocities_new = velocities_half + 0.5 * dt * accel_new # eqn 3.11c
+    velocities_new = velocities_half + 0.5 * dt * accel_new  # eqn 3.11c
 
     return positions_new, velocities_new, forces_new, potential_energy
