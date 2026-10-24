@@ -106,3 +106,137 @@ def energy_drift_test(positions, velocities, box_length, time_steps, total_time)
 
     return results
 
+
+"""
+Puts everything together.
+1. Place the atoms on the lattice and give them Maxwell-Boltzmann velocities at T = 0.722.
+2. Equilibrate: run velocity verlet and rescale the velocities every few steps so the temperature stays at 0.722.
+3. Energy drift test: check which dt keeps the total energy constant.
+4. Production: plain NVE (no more rescaling). Collect g(r) histograms, energies and the total momentum.
+5. Normalise g(r), print the sanity checks and save the plots.
+"""
+
+def main():
+    np.random.seed(0)
+
+    number_of_atoms = 512
+    target_temperature = 0.722
+    dt = 0.002
+
+    equilibration_steps = 1000
+    rescale_every = 10
+    production_steps = 2000
+    sample_every = 10
+
+    drift_time_steps = [0.001, 0.002, 0.004]
+    drift_total_time = 0.4
+
+    dr = 0.02
+
+    positions, box_length = init_positions(number_of_atoms)
+    velocities = init_velocities(number_of_atoms, target_temperature)
+    velocities = rescale_velocities(velocities, target_temperature)
+    forces, potential_energy = lj_force_potential(positions, box_length)
+
+    print("N =", number_of_atoms, " L =", box_length, " rho =", number_of_atoms / box_length ** 3)
+    print("Initial T =", temperature(velocities), " PE/N =", potential_energy / number_of_atoms)
+
+    start_time = time.time()
+    for step in range(1, equilibration_steps + 1):
+        positions, velocities, forces, potential_energy = velocity_verlet_step(
+            positions, velocities, forces, box_length, dt)
+        if step % rescale_every == 0:
+            velocities = rescale_velocities(velocities, target_temperature)
+        if step % 100 == 0:
+            print("equilibration step", step, " T =", temperature(velocities),
+                  " PE/N =", potential_energy / number_of_atoms)
+    print("Equilibration took", time.time() - start_time, "s")
+
+    print("\ndt  steps  fluctuation  drift")
+    drift_results = energy_drift_test(positions, velocities, box_length, drift_time_steps, drift_total_time)
+
+    plt.figure()
+    for test_dt, times, total_energies in drift_results:
+        plt.plot(times, total_energies, label="dt = " + str(test_dt))
+    plt.xlabel("t*")
+    plt.ylabel("E / N")
+    plt.legend()
+    plt.title("Energy conservation")
+    plt.savefig("energy_drift.png", dpi=150)
+    plt.close()
+
+    bin_edges = np.arange(0.0, box_length / 2 + dr, dr)
+    total_pair_counts = np.zeros(len(bin_edges) - 1)
+    number_of_samples = 0
+
+    times = np.zeros(production_steps)
+    kinetic_energies = np.zeros(production_steps)
+    potential_energies = np.zeros(production_steps)
+    temperatures = np.zeros(production_steps)
+    momenta = np.zeros(production_steps)
+
+    start_time = time.time()
+    for step in range(production_steps):
+        positions, velocities, forces, potential_energy = velocity_verlet_step(
+            positions, velocities, forces, box_length, dt)
+
+        times[step] = (step + 1) * dt
+        kinetic_energies[step] = kinetic_energy(velocities)
+        potential_energies[step] = potential_energy
+        temperatures[step] = temperature(velocities)
+        momenta[step] = np.linalg.norm(np.sum(velocities, axis=0))
+
+        if (step + 1) % sample_every == 0:
+            total_pair_counts += gr_pair_counts(positions, box_length, bin_edges)
+            number_of_samples += 1
+
+        if (step + 1) % 100 == 0:
+            print("production step", step + 1, " T =", temperatures[step],
+                  " E/N =", (kinetic_energies[step] + potential_energies[step]) / number_of_atoms)
+    print("Production took", time.time() - start_time, "s")
+
+    bin_centers, g_of_r = normalize_gr(total_pair_counts, number_of_samples, number_of_atoms, box_length, bin_edges)
+    total_energies = kinetic_energies + potential_energies
+
+    print("\nKE/N =", np.mean(kinetic_energies) / number_of_atoms)
+    print("PE/N =", np.mean(potential_energies) / number_of_atoms)
+    print("E/N  =", np.mean(total_energies) / number_of_atoms, "+/-", np.std(total_energies) / number_of_atoms)
+    print("T    =", np.mean(temperatures))
+    print("Equipartition: K =", np.mean(kinetic_energies), " 3/2 N <T> =", 1.5 * number_of_atoms * np.mean(temperatures))
+    print("Max |total momentum| =", np.max(momenta))
+    peak = np.argmax(g_of_r)
+    print("First g(r) peak at r =", bin_centers[peak], " height =", g_of_r[peak])
+    print("g(r) average over the last 10 bins =", np.mean(g_of_r[-10:]))
+
+    plt.figure()
+    plt.plot(bin_centers, g_of_r)
+    plt.axhline(1.0, color="gray", linestyle="--")
+    plt.xlabel("r")
+    plt.ylabel("g(r)")
+    plt.title("Radial distribution function")
+    plt.savefig("gr.png", dpi=150)
+    plt.close()
+
+    plt.figure()
+    plt.plot(times, kinetic_energies / number_of_atoms, label="KE / N")
+    plt.plot(times, potential_energies / number_of_atoms, label="PE / N")
+    plt.plot(times, total_energies / number_of_atoms, label="E / N")
+    plt.xlabel("t")
+    plt.ylabel("energy per atom")
+    plt.legend()
+    plt.title("Production energies (NVE)")
+    plt.savefig("production_energies.png", dpi=150)
+    plt.close()
+
+    plt.figure()
+    plt.plot(times, temperatures)
+    plt.axhline(target_temperature, color="gray", linestyle="--")
+    plt.xlabel("t")
+    plt.ylabel("T")
+    plt.title("Temperature (NVE)")
+    plt.savefig("temperature.png", dpi=150)
+    plt.close()
+
+
+if __name__ == "__main__":
+    main()
